@@ -782,13 +782,14 @@ del _bm, _blocked_mods
 # ══════════════════════════════════════════════════════════════════════════════
 # _build_runner — build the 3-stage nested-exec runner source
 # ══════════════════════════════════════════════════════════════════════════════
-def _build_runner(compressed: bytes, ver: str,
+def _build_runner(compressed: bytes, raw_bytecode: bytes, ver: str,
                   bot_name: str, bot_username: str,
                   owner: str, vn_time: str) -> str:
 
     # Encode payload + sign
     hanzi_payload  = hanzi_encode(compressed)
-    integrity_hash = _compute_integrity(compressed)
+    integrity_hash = _compute_integrity(raw_bytecode) # Tính hash trên bytecode chưa nén
+
 
     # Random variable names for the runner skeleton
     V   = [_korean_id() for _ in range(30)]
@@ -988,8 +989,9 @@ def obfuscate_code(source: str, bot_name: str,
     compressed = base64.a85encode(
         bz2.compress(zlib.compress(lzma.compress(bytecode))))
 
-    return _build_runner(compressed, ver, bot_name,
+    return _build_runner(compressed, bytecode, ver, bot_name,
                          bot_username, owner, vn_time)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MarkdownV2 escape helper
