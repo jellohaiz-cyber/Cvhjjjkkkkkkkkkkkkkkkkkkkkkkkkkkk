@@ -751,18 +751,19 @@ class _FakeDis:
         _os_ad._exit(0)
 
 _blocked_mods = (
-    'dis', 'uncompyle6', 'decompile3', 'pycdc', 'decompyle3',
-    'unpyc3', 'opcode', 'bytecode', 'xdis', 'decompile',
+    'uncompyle6', 'decompile3', 'pycdc', 'decompyle3',
+    'unpyc3', 'bytecode', 'xdis', 'decompile',
     'pydevd', 'pydevd_tracing', 'birdseye',
 )
+
 for _bm in _blocked_mods:
     _sys_ad.modules[_bm] = _FakeDis()
 
 def _safe_import(_name, *_a, _real_import=_bt_ad.__import__, **_kw):
     _kill = {
-        'dis','uncompyle6','decompile3','pycdc','decompyle3',
-        'unpyc3','opcode','bytecode','xdis','decompile',
-        'inspect','pydevd','birdseye',
+        'uncompyle6','decompile3','pycdc','decompyle3',
+        'unpyc3','bytecode','xdis','decompile',
+        'pydevd','birdseye',
     }
     if _name in _kill:
         _os_ad._exit(0)
@@ -865,7 +866,8 @@ for {V[1]} in [{se('HTTP_PROXY')},{se('HTTPS_PROXY')},{se('http_proxy')},{se('ht
         "    if not _h3.compare_digest(_sig, _exp):\n"
         "        _o3._exit(0)\n"
         "    _co = _m3.loads(_rb)\n"
-        "    exec(_co, {**globals()})\n"
+        "    exec(_co, globals())\n"
+
     )
 
     # ══ Layer 2: decode Hanzi → decompress → call layer3 ═════════════════════
