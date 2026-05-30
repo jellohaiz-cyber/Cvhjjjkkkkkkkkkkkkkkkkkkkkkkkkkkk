@@ -737,6 +737,9 @@ class _VarRenamer(ast.NodeTransformer):
 # ══════════════════════════════════════════════════════════════════════════════
 # Anti-dis block injected at top of every enc file
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Anti-dis block injected at top of every enc file
+# ══════════════════════════════════════════════════════════════════════════════
 _ANTI_DIS_BLOCK = r"""
 import sys as _sys_ad, os as _os_ad, builtins as _bt_ad
 
@@ -755,8 +758,7 @@ _blocked_mods = (
 for _bm in _blocked_mods:
     _sys_ad.modules[_bm] = _FakeDis()
 
-_real_import = _bt_ad.__import__
-def _safe_import(_name, *_a, **_kw):
+def _safe_import(_name, *_a, _real_import=_bt_ad.__import__, **_kw):
     _kill = {
         'dis','uncompyle6','decompile3','pycdc','decompyle3',
         'unpyc3','opcode','bytecode','xdis','decompile',
@@ -774,7 +776,7 @@ try:
 except Exception:
     pass
 
-del _bm, _blocked_mods, _real_import
+del _bm, _blocked_mods
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
