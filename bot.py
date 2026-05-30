@@ -1009,7 +1009,7 @@ def _mdv2(s: str) -> str:
     return s
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Telegram message templates (Bỏ các dấu escape thủ công gây lỗi)
+# Telegram message templates
 # ══════════════════════════════════════════════════════════════════════════════
 def _start_msg() -> str:
     ow = _mdv2(OWNER)
@@ -1020,7 +1020,7 @@ def _start_msg() -> str:
         "╚══════════════════════════════════╝\n"
         "\n"
         "> 🛡️ Bot mã hoá Python đa lớp bảo vệ cao cấp\n"
-        "> Kết hợp nhiều kỹ thuật anti-decompile tiên tiến\n"
+        "> Kết hợp nhiều kỹ thuật anti\\-decompile tiên tiến\n"  # Đã thêm \ trước dấu -
         "\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "📌 *CÁCH DÙNG*\n"
@@ -1035,12 +1035,11 @@ def _start_msg() -> str:
     )
 
 def _progress_msg(fname: str = '') -> str:
-    # Nếu có tên file, escape tên file đó rồi đưa vào
     tag = f'`{_mdv2(fname)}` ' if fname else ''
     return (
-        f"⏳ *Đang mã hoá* {tag}...\n"
+        f"⏳ *Đang mã hoá* {tag}\\.\\.\\.\n"  # Đã thêm \ trước các dấu chấm
         "\n"
-        "> 🀄 ĐỢI MỘT LÁT ..... \n"
+        "> 🀄 ĐỢI MỘT LÁT \\.\\.\\.\\.\\. \n"  # Đã thêm \ trước các dấu chấm
     )
 
 def _success_msg(out_name: str, vn_time: str) -> str:
@@ -1050,7 +1049,7 @@ def _success_msg(out_name: str, vn_time: str) -> str:
     bu = _mdv2(BOT_USERNAME)
     return (
         "╔═════════════════════════════╗\n"
-        "║  ✅ *Mã hoá thành công!* ✅ ║\n"
+        "║  ✅ *Mã hoá thành công\\!* ✅ ║\n"  # Đã thêm \ trước dấu chấm than
         "╚═════════════════════════════╝\n"
         "\n"
         f"> 📄 *File:* `{fn}`\n"
@@ -1071,9 +1070,6 @@ def _doc_caption(out_name: str) -> str:
 def _err_msg(label: str, err: str) -> str:
     return f'> ❌ *{_mdv2(label)}*\n`{_mdv2(err)}`'
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Telegram handlers
-# ══════════════════════════════════════════════════════════════════════════════
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         _start_msg(), parse_mode=ParseMode.MARKDOWN_V2)
@@ -1082,8 +1078,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not (doc.file_name or '').endswith('.py'):
-        err_txt = _mdv2("> ❌ Chỉ hỗ trợ file `.py`")
+        # Thay vì dùng _mdv2, chúng ta viết đúng chuẩn MarkdownV2
+        err_txt = "> ❌ Chỉ hỗ trợ file `.py`"
         await update.message.reply_text(err_txt, parse_mode=ParseMode.MARKDOWN_V2)
+
         return
 
 
@@ -1143,8 +1141,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         '@', 'lambda ', 'return ', 'yield ',
     )
     if not any(text.startswith(s) for s in py_starters):
-        text_err = _mdv2("> 💬 Gửi file `.py` hoặc paste code Python để mã hoá.")
+        # Thêm \ trước dấu chấm ở cuối câu
+        text_err = "> 💬 Gửi file `.py` hoặc paste code Python để mã hoá\\."
         await update.message.reply_text(text_err, parse_mode=ParseMode.MARKDOWN_V2)
+
 
         return
 
