@@ -762,6 +762,77 @@ def _inject_global_poison(tree: ast.Module) -> ast.Module:
     # Đổi thành _safe_inject thay vì poison + tree.body
     return _safe_inject(tree, poison)
 
+class _ControlFlowFlattening(ast.NodeTransformer):
+    def visit_FunctionDef(self, node):
+        self.generic_visit(node)
+        if not node.body: return node
+
+        # Only flatten functions with more than 3 statements
+        if len(node.body) < 3: return node
+
+        # Create a dispatcher variable and initial state
+        dispatcher_var = _korean_id(8)
+        state_var = _korean_id(8)
+        initial_state = random.randint(1000, 9999)
+
+        # Map original statements to new states
+        statements = []
+        state_map = {}
+        current_state = initial_state
+        for stmt in node.body:
+            state_map[stmt] = current_state
+            statements.append((current_state, stmt))
+            current_state += random.randint(1, 10)
+
+        # Create a while loop for the dispatcher
+        loop_body = []
+        for i, (state, stmt) in enumerate(statements):
+            next_state = state_map.get(statements[i+1][1]) if i < len(statements) - 1 else 0
+            
+            # Create an If statement for each state
+            if_stmt = ast.If(
+                test=ast.Compare(
+                    left=ast.Name(id=state_var, ctx=ast.Load()),
+                    ops=[ast.Eq()],
+                    comparators=[ast.Constant(state)]
+                ),
+                body=[stmt],
+                orelse=[]
+            )
+            
+            # Add state update for the next iteration
+            if next_state != 0:
+                if_stmt.body.append(ast.Assign(
+                    targets=[ast.Name(id=state_var, ctx=ast.Store())],
+                    value=ast.Constant(next_state),
+                    lineno=0, col_offset=0
+                ))
+            else:
+                # Break the loop if it's the last statement
+                if_stmt.body.append(ast.Break())
+            
+            loop_body.append(if_stmt)
+
+        # Initialize state variable
+        init_state_assign = ast.Assign(
+            targets=[ast.Name(id=state_var, ctx=ast.Store())],
+            value=ast.Constant(initial_state),
+            lineno=0, col_offset=0
+        )
+
+        # Create the while loop
+        while_loop = ast.While(
+            test=ast.Constant(True),
+            body=loop_body,
+            orelse=[]
+        )
+
+        node.body = [init_state_assign, while_loop]
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+
 
 # Anti-dis: block decompiler modules in sys.modules + ctypes trick
 _ANTI_DIS_BLOCK = r"""
@@ -1182,74 +1253,3 @@ if __name__ == '__main__':
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW PASS 15: _ControlFlowFlattening
 # ══════════════════════════════════════════════════════════════════════════════
-class _ControlFlowFlattening(ast.NodeTransformer):
-    def visit_FunctionDef(self, node):
-        self.generic_visit(node)
-        if not node.body: return node
-
-        # Only flatten functions with more than 3 statements
-        if len(node.body) < 3: return node
-
-        # Create a dispatcher variable and initial state
-        dispatcher_var = _korean_id(8)
-        state_var = _korean_id(8)
-        initial_state = random.randint(1000, 9999)
-
-        # Map original statements to new states
-        statements = []
-        state_map = {}
-        current_state = initial_state
-        for stmt in node.body:
-            state_map[stmt] = current_state
-            statements.append((current_state, stmt))
-            current_state += random.randint(1, 10)
-
-        # Create a while loop for the dispatcher
-        loop_body = []
-        for i, (state, stmt) in enumerate(statements):
-            next_state = state_map.get(statements[i+1][1]) if i < len(statements) - 1 else 0
-            
-            # Create an If statement for each state
-            if_stmt = ast.If(
-                test=ast.Compare(
-                    left=ast.Name(id=state_var, ctx=ast.Load()),
-                    ops=[ast.Eq()],
-                    comparators=[ast.Constant(state)]
-                ),
-                body=[stmt],
-                orelse=[]
-            )
-            
-            # Add state update for the next iteration
-            if next_state != 0:
-                if_stmt.body.append(ast.Assign(
-                    targets=[ast.Name(id=state_var, ctx=ast.Store())],
-                    value=ast.Constant(next_state),
-                    lineno=0, col_offset=0
-                ))
-            else:
-                # Break the loop if it's the last statement
-                if_stmt.body.append(ast.Break())
-            
-            loop_body.append(if_stmt)
-
-        # Initialize state variable
-        init_state_assign = ast.Assign(
-            targets=[ast.Name(id=state_var, ctx=ast.Store())],
-            value=ast.Constant(initial_state),
-            lineno=0, col_offset=0
-        )
-
-        # Create the while loop
-        while_loop = ast.While(
-            test=ast.Constant(True),
-            body=loop_body,
-            orelse=[]
-        )
-
-        node.body = [init_state_assign, while_loop]
-        return node
-
-    visit_AsyncFunctionDef = visit_FunctionDef
-
-
