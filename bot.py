@@ -941,29 +941,30 @@ except Exception:
 del _bm, _blocked_mods
 """
 
-# Anti-debugger block (kiểm tra sys.gettrace, debugger, pydevd, inspect)
+# Anti-debugger block — chỉ kill nếu CHẮC CHẮN đang bị debug (pydevd filename)
+# KHÔNG dùng gettrace() vì Termux/CPython build trả non-None bình thường
 _ANTI_DEBUG_BLOCK = r"""
 import sys as _sys_dbg, os as _os_dbg
 try:
-    if _sys_dbg.gettrace() is not None:
-        _os_dbg._exit(0)
-except Exception:
-    pass
-try:
-    _dbg_env = _os_dbg.environ.get('PYTHONBREAKPOINT', '')
-    if _dbg_env and _dbg_env != '0':
-        _os_dbg._exit(0)
-except Exception:
-    pass
-try:
     import inspect as _ins_dbg
     _frame = _ins_dbg.currentframe()
-    if _frame and _frame.f_back and _frame.f_back.f_back:
-        _cn = getattr(_frame.f_back.f_back, 'f_code', None)
-        if _cn and getattr(_cn, 'co_filename', '').endswith('pydevd.py'):
-            _os_dbg._exit(0)
+    if _frame is not None:
+        _f = _frame
+        for _ in range(8):
+            _f = getattr(_f, 'f_back', None)
+            if _f is None:
+                break
+            _fn = getattr(getattr(_f, 'f_code', None), 'co_filename', '')
+            if 'pydevd' in _fn or 'pdb.py' in _fn or '_pytest' in _fn:
+                _os_dbg._exit(0)
 except Exception:
     pass
+finally:
+    for _v in ('_frame', '_f', '_fn', '_ins_dbg'):
+        try:
+            del globals()[_v]
+        except Exception:
+            pass
 del _sys_dbg, _os_dbg
 """
 
@@ -1023,18 +1024,28 @@ def _build_runner(compressed: bytes, raw_bytecode: bytes, ver: str,
     _hook_str    = _chr('Hook ha con trai')
     _b64decode_str = _chr('<built-in function b64decode>')
 
-    # ── Anti-hook checks ───────────────────────────────────────────────────
+    # ── Anti-hook checks — wrap try/except, chỉ exit khi CHẮC bị hook ────────
+    # Không so sánh cứng repr string (khác nhau giữa Python builds/versions)
+    # Thay vào đó: kiểm tra type và callable, không bị override bởi wrapper object
     anti_hooks = f"""
-if goku(capsule_add({se('sys')}).exit) != {_exit_str}:
-    print({_hook_str}); capsule_add({se('sys')}).exit()
-if goku(getattr(capsule_add({se('builtins')}),{se('print')})) != {_print_str}:
-    print({_hook_str}); capsule_add({se('sys')}).exit()
-if goku(getattr(capsule_add({se('builtins')}),{se('exec')})) != {_exec_str}:
-    print({_hook_str}); capsule_add({se('sys')}).exit()
-if goku(getattr(capsule_add({se('builtins')}),{se('len')})) != {_len_str}:
-    print({_hook_str}); capsule_add({se('sys')}).exit()
-if goku(capsule_add({se('marshal')}).loads) != {_loads_str}:
-    print({_hook_str}); capsule_add({se('sys')}).exit()
+try:
+    _ah_sys = capsule_add({se('sys')})
+    _ah_bi  = capsule_add({se('builtins')})
+    _ah_bi_exit   = getattr(_ah_bi, {se('exit')})
+    _ah_bi_print  = getattr(_ah_bi, {se('print')})
+    _ah_bi_exec   = getattr(_ah_bi, {se('exec')})
+    _ah_bi_eval   = getattr(_ah_bi, {se('eval')})
+    _ah_sys_exit  = _ah_sys.exit
+    _ah_m_loads   = capsule_add({se('marshal')}).loads
+    if not callable(_ah_bi_print): _ah_sys.exit()
+    if not callable(_ah_bi_exec):  _ah_sys.exit()
+    if not callable(_ah_bi_eval):  _ah_sys.exit()
+    if not callable(_ah_m_loads):  _ah_sys.exit()
+    if type(_ah_bi_print).__name__ not in ({se('builtin_function_or_method')}, {se('function')}): _ah_sys.exit()
+    if type(_ah_bi_exec).__name__  not in ({se('builtin_function_or_method')}, {se('function')}): _ah_sys.exit()
+    del _ah_sys, _ah_bi, _ah_bi_exit, _ah_bi_print, _ah_bi_exec, _ah_bi_eval, _ah_sys_exit, _ah_m_loads
+except Exception:
+    pass
 """
 
     # ── Anti-proxy / anti-httptoolkit ─────────────────────────────────────
