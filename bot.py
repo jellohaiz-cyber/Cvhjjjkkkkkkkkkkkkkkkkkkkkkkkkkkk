@@ -318,22 +318,17 @@ def sakura_bl_func(node):
 
 def random_match_case() -> ast.AST:
     jv = '_'+spam_hanzi()
-    return ast.Match(
-        subject=ast.Compare(
-            left=ast.Constant(spam_hanzi()),ops=[ast.Eq()],
+    # Chuyển sang dùng if-else thông thường để tương thích ngược với Python 3.9 trở xuống
+    return ast.If(
+        test=ast.Compare(
+            left=ast.Constant(spam_hanzi()), ops=[ast.Eq()],
             comparators=[ast.Constant(spam_hanzi())]),
-        cases=[
-            ast.match_case(
-                pattern=ast.MatchSingleton(value=True),guard=None,
-                body=[ast.Raise(exc=ast.Call(
-                    func=ast.Name(id='MemoryError',ctx=ast.Load()),
-                    args=[],keywords=[]),cause=None)]),
-            ast.match_case(
-                pattern=ast.MatchSingleton(value=False),guard=None,
-                body=[ast.Assign(lineno=0,col_offset=0,
-                    targets=[ast.Name(id=jv,ctx=ast.Store())],
-                    value=ast.Constant(random.randint(1,9999999)))]),
-        ])
+        body=[ast.Raise(exc=ast.Call(func=ast.Name(id='MemoryError',ctx=ast.Load()), args=[], keywords=[]), cause=None)],
+        orelse=[ast.Assign(lineno=0, col_offset=0,
+            targets=[ast.Name(id=jv,ctx=ast.Store())],
+            value=ast.Constant(random.randint(1,9999999)))]
+    )
+
 
 def sakura_trycatch(body: list, loop: int) -> list:
     result = []
@@ -623,6 +618,19 @@ _FAKE_FUNC_BODIES = [
     "    _v=list(_a);_v.sort();return _v",
 ]
 
+# Tìm dòng định nghĩa các hàm Pass 14 và chèn đoạn tách __future__ này vào:
+def _safe_inject(tree: ast.Module, injected_nodes: list) -> ast.Module:
+    futures = []
+    rest = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == '__future__':
+            futures.append(node)
+        else:
+            rest.append(node)
+    tree.body = futures + injected_nodes + rest
+    return tree
+
+# Sửa lại hàm _inject_dead_functions (tương tự áp dụng cho global_poison và junk_imports)
 def _inject_dead_functions(tree: ast.Module) -> ast.Module:
     dead = []
     for _ in range(random.randint(4,8)):
@@ -636,8 +644,7 @@ def _inject_dead_functions(tree: ast.Module) -> ast.Module:
             dead.append(fn_node)
         except Exception:
             pass
-    tree.body = dead + tree.body
-    return tree
+    return _safe_inject(tree, dead) # Dùng _safe_inject thay vì cộng chuỗi thẳng
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW PASS 6: _OpaquePredicateInjector — wrap stmts with always-True/False conditions
@@ -732,8 +739,8 @@ def _inject_junk_imports(tree: ast.Module) -> ast.Module:
     junk = []
     for mod in random.sample(_JUNK_STDLIB, random.randint(3,6)):
         junk.append(ast.Import(names=[ast.alias(name=mod,asname=_korean_id(8))]))
-    tree.body = junk + tree.body
-    return tree
+    # Đổi thành _safe_inject thay vì junk + tree.body
+    return _safe_inject(tree, junk)
 
 def _inject_global_poison(tree: ast.Module) -> ast.Module:
     poison = []
@@ -752,12 +759,9 @@ def _inject_global_poison(tree: ast.Module) -> ast.Module:
         poison.append(ast.Assign(
             targets=[ast.Name(id=name,ctx=ast.Store())],
             value=val,lineno=0,col_offset=0))
-    tree.body = poison + tree.body
-    return tree
+    # Đổi thành _safe_inject thay vì poison + tree.body
+    return _safe_inject(tree, poison)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Anti blocks
-# ══════════════════════════════════════════════════════════════════════════════
 
 # Anti-dis: block decompiler modules in sys.modules + ctypes trick
 _ANTI_DIS_BLOCK = r"""
@@ -891,13 +895,14 @@ except Exception:
 """
 
     # Layer 3: HMAC → marshal → exec
+    # Layer 3: HMAC → Giải mã thẳng text → exec (Bỏ marshal)
     layer3_src = (
-        "import marshal as _m3, hmac as _h3, hashlib as _hs3, os as _o3\n"
+        "import hmac as _h3, hashlib as _hs3, os as _o3\n"
         f"def {lv3}(_rb,_sig):\n"
         "    _k=b'CuongObfIntegrity2010ShenronVIP'\n"
         "    if not _h3.compare_digest(_h3.new(_k,_rb,_hs3.sha256).hexdigest(),_sig):\n"
         "        _o3._exit(0)\n"
-        "    exec(_m3.loads(_rb),globals())\n"
+        "    exec(_rb.decode('utf-8'),globals())\n" # <-- Thay đổi mấu chốt ở đây
     )
 
     # Layer 2: Hanzi → un-ROT → XOR → decompress → layer3
@@ -1020,11 +1025,11 @@ def obfuscate_code(source: str, bot_name: str, bot_username: str, owner: str) ->
     ast.fix_missing_locations(tree)
     obf_src = ast.unparse(tree)
 
-    code_obj   = compile(obf_src, '<CuongObf>', 'exec')
-    bytecode   = marshal.dumps(code_obj)
-    compressed = base64.a85encode(bz2.compress(zlib.compress(lzma.compress(bytecode))))
-
-    return _build_runner(compressed, bytecode, ver, bot_name, bot_username, owner, vn_time)
+    # Bỏ compile và marshal, encode thẳng code đã mã hoá thành bytes
+    raw_payload = obf_src.encode('utf-8')
+    compressed  = base64.a85encode(bz2.compress(zlib.compress(lzma.compress(raw_payload))))
+    return _build_runner(compressed, raw_payload, ver, bot_name, bot_username, owner, vn_time)
+    
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MarkdownV2
