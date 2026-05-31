@@ -1011,7 +1011,7 @@ except Exception:
         f"class CapsuleCorp(object):\n"
         f"    def __init__(self):\n"
         f"        {V[20]}=__import__({_sys_chr})\n"
-        f"                if str({V[20]}.version_info.major)!=chr(51): pass # Changed from {V[20]}.exit() to pass\n"
+        f"        if str({V[20]}.version_info.major)!=chr(51): pass # Changed from {V[20]}.exit() to pass\n"
         f"        {V[20]}.stderr.write({_run_chr}+chr(10))\n"
         f"    def __call__(self,*{va},**{vb}):\n"
         f"        global yamcha,capsule,radar,shenron,frieza,goku,vegeta,gohan,trunks,bulma,kamehameha,capsule_add\n"
