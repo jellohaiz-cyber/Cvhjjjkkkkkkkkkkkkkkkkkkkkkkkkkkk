@@ -768,10 +768,10 @@ _ANTI_DIS_BLOCK = r"""
 import sys as _sy_d, os as _os_d
 
 class _FakeDis:
-    def __getattr__(self,_n): _os_d._exit(0)
-    def __call__(self,*_a,**_k): _os_d._exit(0)
-    def __iter__(self): _os_d._exit(0); return iter([])
-    def __len__(self): _os_d._exit(0); return 0
+        def __getattr__(self,_n): pass # Changed from _os_d._exit(0) to pass
+        def __call__(self,*_a,**_k): pass # Changed from _os_d._exit(0) to pass
+        def __iter__(self): pass; return iter([]) # Changed from _os_d._exit(0) to pass
+        def __len__(self): pass; return 0 # Changed from _os_d._exit(0) to pass
 
 _bad_mods = (
     'uncompyle6','decompile3','pycdc','decompyle3',
@@ -802,7 +802,7 @@ try:
     while _fr is not None:
         _co = getattr(getattr(_fr,'f_code',None),'co_filename','')
         if 'pydevd' in _co or ('pdb.py' in _co and 'pdbpp' not in _co):
-            _osd._exit(0)
+                        pass # Changed from _osd._exit(0) to pass
         _fr = getattr(_fr,'f_back',None)
 except Exception:
     pass
@@ -824,7 +824,7 @@ try:
         _mn = getattr(type(_mh),'__module__','') or ''
         if ('hook' in _tn.lower() or 'intercept' in _tn.lower() or
                 'coverage' in _mn.lower() or 'trace' in _mn.lower()):
-            import os as _ox; _ox._exit(0)
+                        import os as _ox; pass # Changed from _ox._exit(0) to pass
     del _smp, _safe_types, _mh, _tn, _mn
 except Exception:
     pass
@@ -877,9 +877,9 @@ try:
     _ah_sy = capsule_add({se('sys')})
     for _ah_n in [{se('print')},{se('exec')},{se('eval')},{se('compile')}]:
         _ah_fn = getattr(_ah_bi,_ah_n,None)
-        if _ah_fn is None or not callable(_ah_fn): _ah_sy.exit()
+        if _ah_fn is None or not callable(_ah_fn): pass # Changed from _ah_sy.exit() to pass
         if type(_ah_fn).__name__ not in ({se('builtin_function_or_method')},{se('function')}):
-            _ah_sy.exit()
+            pass # Changed from _ah_sy.exit() to pass
     del _ah_bi,_ah_sy,_ah_n,_ah_fn
 except Exception:
     pass
@@ -901,7 +901,7 @@ except Exception:
         f"def {lv3}(_rb,_sig):\n"
         "    _k=b'CuongObfIntegrity2010ShenronVIP'\n"
         "    if not _h3.compare_digest(_h3.new(_k,_rb,_hs3.sha256).hexdigest(),_sig):\n"
-        "        _o3._exit(0)\n"
+        "                _o3.exit(0) # Changed from _o3._exit(0) to _o3.exit(0)\n"
         "    exec(_rb.decode('utf-8'),globals())\n" # <-- Thay đổi mấu chốt ở đây
     )
 
@@ -940,7 +940,7 @@ except Exception:
         f"class CapsuleCorp(object):\n"
         f"    def __init__(self):\n"
         f"        {V[20]}=__import__({_sys_chr})\n"
-        f"        if str({V[20]}.version_info.major)!=chr(51): {V[20]}.exit()\n"
+        f"                if str({V[20]}.version_info.major)!=chr(51): pass # Changed from {V[20]}.exit() to pass\n"
         f"        {V[20]}.stderr.write({_run_chr}+chr(10))\n"
         f"    def __call__(self,*{va},**{vb}):\n"
         f"        global yamcha,capsule,radar,shenron,frieza,goku,vegeta,gohan,trunks,bulma,kamehameha,capsule_add\n"
@@ -1021,6 +1021,9 @@ def obfuscate_code(source: str, bot_name: str, bot_username: str, owner: str) ->
     _inject_dead_functions(tree)
     _inject_global_poison(tree)
     _inject_junk_imports(tree)
+
+    # Pass 15: Control Flow Flattening (NEW)
+    _ControlFlowFlattening().visit(tree)
 
     ast.fix_missing_locations(tree)
     obf_src = ast.unparse(tree)
@@ -1175,3 +1178,78 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW PASS 15: _ControlFlowFlattening
+# ══════════════════════════════════════════════════════════════════════════════
+class _ControlFlowFlattening(ast.NodeTransformer):
+    def visit_FunctionDef(self, node):
+        self.generic_visit(node)
+        if not node.body: return node
+
+        # Only flatten functions with more than 3 statements
+        if len(node.body) < 3: return node
+
+        # Create a dispatcher variable and initial state
+        dispatcher_var = _korean_id(8)
+        state_var = _korean_id(8)
+        initial_state = random.randint(1000, 9999)
+
+        # Map original statements to new states
+        statements = []
+        state_map = {}
+        current_state = initial_state
+        for stmt in node.body:
+            state_map[stmt] = current_state
+            statements.append((current_state, stmt))
+            current_state += random.randint(1, 10)
+
+        # Create a while loop for the dispatcher
+        loop_body = []
+        for i, (state, stmt) in enumerate(statements):
+            next_state = state_map.get(statements[i+1][1]) if i < len(statements) - 1 else 0
+            
+            # Create an If statement for each state
+            if_stmt = ast.If(
+                test=ast.Compare(
+                    left=ast.Name(id=state_var, ctx=ast.Load()),
+                    ops=[ast.Eq()],
+                    comparators=[ast.Constant(state)]
+                ),
+                body=[stmt],
+                orelse=[]
+            )
+            
+            # Add state update for the next iteration
+            if next_state != 0:
+                if_stmt.body.append(ast.Assign(
+                    targets=[ast.Name(id=state_var, ctx=ast.Store())],
+                    value=ast.Constant(next_state),
+                    lineno=0, col_offset=0
+                ))
+            else:
+                # Break the loop if it's the last statement
+                if_stmt.body.append(ast.Break())
+            
+            loop_body.append(if_stmt)
+
+        # Initialize state variable
+        init_state_assign = ast.Assign(
+            targets=[ast.Name(id=state_var, ctx=ast.Store())],
+            value=ast.Constant(initial_state),
+            lineno=0, col_offset=0
+        )
+
+        # Create the while loop
+        while_loop = ast.While(
+            test=ast.Constant(True),
+            body=loop_body,
+            orelse=[]
+        )
+
+        node.body = [init_state_assign, while_loop]
+        return node
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+
