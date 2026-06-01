@@ -36,7 +36,7 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════════════════
 # Config
 # ══════════════════════════════════════════════════════════════════════════════
-BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN    = "8397744945:AAGr7WR3viIb0oNl7GML4xSFX0Ygdpc3Wl8"
 BOT_NAME     = 'Obf Cpython'
 BOT_USERNAME = '@ObfCpythonRobot'
 OWNER        = '@truongphuhaokhithaylonquenloi'
