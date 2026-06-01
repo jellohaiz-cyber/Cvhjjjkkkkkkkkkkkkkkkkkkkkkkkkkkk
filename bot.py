@@ -2,17 +2,18 @@
 # -*- coding: utf-8 -*-
 
 import os, sys, ast, zlib, bz2, lzma, base64, marshal, random, tempfile
-import hashlib, logging, struct
+import hashlib, logging, struct, subprocess, time
 import hmac as _hmac_module
 from datetime import datetime
+from collections import defaultdict
 
-sys.setrecursionlimit(99999999)
+sys.setrecursionlimit(50000)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Auto-install
 # ══════════════════════════════════════════════════════════════════════════════
 def _install(pkg: str) -> None:
-    os.system(f'{sys.executable} -m pip install {pkg} -q')
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', pkg, '-q'])
 
 try:
     from telegram import Update
@@ -35,11 +36,24 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════════════════
 # Config
 # ══════════════════════════════════════════════════════════════════════════════
-BOT_TOKEN    = "8397744945:AAGr7WR3viIb0oNl7GML4xSFX0Ygdpc3Wl8"
+BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
 BOT_NAME     = 'Obf Cpython'
 BOT_USERNAME = '@ObfCpythonRobot'
 OWNER        = '@truongphuhaokhithaylonquenloi'
 VN_TZ        = pytz.timezone('Asia/Ho_Chi_Minh')
+
+MAX_FILE_SIZE = 500_000   # 500 KB
+RATE_LIMIT_S  = 10        # seconds between requests per user
+
+# Per-user rate limiting
+_last_req: dict = defaultdict(float)
+
+def _check_rate(user_id: int) -> bool:
+    now = time.time()
+    if now - _last_req[user_id] < RATE_LIMIT_S:
+        return False
+    _last_req[user_id] = now
+    return True
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Hanzi hex alphabet
@@ -139,13 +153,15 @@ def _compute_integrity(data: bytes) -> str:
     return _hmac_module.new(_INTEGRITY_KEY, data, hashlib.sha256).hexdigest()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# varsobf
+# varsobf — sentinel string encoded as chr() chain to avoid pattern detection
 # ══════════════════════════════════════════════════════════════════════════════
+_SENTINEL_EXPR = '+'.join(f'chr({ord(c)})' for c in 'DitConBaGiaMay')
+
 def varsobf(v: str) -> str:
     r1 = random.randint(1, 1000)
     r2 = random.randint(101, 20_000_000_000)
     return (
-        f"('DitConBaGiaMay') if 2010 < 611 or 611 > 2010 or 12345 > 67890 or "
+        f"({_SENTINEL_EXPR}) if 2010 < 611 or 611 > 2010 or 12345 > 67890 or "
         f"98765 < 54321 or 'test'=='false' or 0==1 or False==True or "
         f"1==2 or 10>20 or {r1}>{r2} else {v}"
     )
@@ -318,7 +334,6 @@ def sakura_bl_func(node):
 
 def random_match_case() -> ast.AST:
     jv = '_'+spam_hanzi()
-    # Chuyển sang dùng if-else thông thường để tương thích ngược với Python 3.9 trở xuống
     return ast.If(
         test=ast.Compare(
             left=ast.Constant(spam_hanzi()), ops=[ast.Eq()],
@@ -407,7 +422,7 @@ def shenron_gen_junk(code: ast.AST) -> list:
     ]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AST Transformers (original)
+# AST Transformers
 # ══════════════════════════════════════════════════════════════════════════════
 class _FStringFlattener(ast.NodeTransformer):
     def visit_JoinedStr(self, node):
@@ -496,10 +511,8 @@ class _VarRenamer(ast.NodeTransformer):
             elif isinstance(node,ast.ImportFrom):
                 for a in node.names:
                     self._protected.add(a.asname or a.name)
-            elif isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef)):
-                self._protected.add(node.name)
-            elif isinstance(node,ast.ClassDef):
-                self._protected.add(node.name)
+            # NOTE: FunctionDef and ClassDef names are NOT added to _protected here
+            # so that visit_FunctionDef / visit_ClassDef can rename them consistently.
             elif isinstance(node,ast.Global):
                 for n in node.names: self._protected.add(n)
             elif isinstance(node,ast.Nonlocal):
@@ -527,7 +540,12 @@ class _VarRenamer(ast.NodeTransformer):
         self.generic_visit(node); return node
 
     def visit_FunctionDef(self, node):
-        self.generic_visit(node); return node
+        # Rename function name if not protected (dunder methods stay)
+        if node.name not in self._protected and not node.name.startswith('__'):
+            node.name = self._alias(node.name)
+        self.generic_visit(node)
+        return node
+
     visit_AsyncFunctionDef = visit_FunctionDef
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -543,17 +561,16 @@ class _NumberMutator(ast.NodeTransformer):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW PASS 2: _StringXORTransformer — XOR encrypt each short string inline
-# Runs BEFORE _ObfctVisitor so strings get double-layered treatment
 # ══════════════════════════════════════════════════════════════════════════════
 class _StringXORTransformer(ast.NodeTransformer):
     def visit_Constant(self, node):
         if not isinstance(node.value,str): return node
         s = node.value
         if not (0 < len(s) < 120): return node
-        if random.random() < 0.5: return node   # only ~50% of strings (rest left for obfct)
+        if random.random() < 0.5: return node
         key = random.randint(1, 127)
         enc = [ord(c)^key for c in s]
-        vx  = _korean_id(7)   # unique loop var
+        vx  = _korean_id(7)
         return ast.Call(
             func=ast.Attribute(
                 value=ast.Constant(''),
@@ -586,7 +603,6 @@ class _BytesObfTransformer(ast.NodeTransformer):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW PASS 4: _AttrObfuscator — obj.attr → getattr(obj, 'attr')
-# Only for Load context, skip dunder attrs and runner names
 # ══════════════════════════════════════════════════════════════════════════════
 class _AttrObfuscator(ast.NodeTransformer):
     _SKIP = {
@@ -609,16 +625,16 @@ class _AttrObfuscator(ast.NodeTransformer):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # NEW PASS 5: _DeadFunctionInjector — inject fake dead functions at module top
+# FIX: Added parentheses around the for..in condition (was SyntaxError)
 # ══════════════════════════════════════════════════════════════════════════════
 _FAKE_FUNC_BODIES = [
     "    _r=0\n    for _i in range(len(_d)):\n        _r^=ord(_d[_i]) if isinstance(_d[_i],str) else _d[_i]\n    return _r",
-    "    _h=0x811c9dc5\n    for _b in _d if isinstance(_d,bytes) else _d.encode():\n        _h^=_b;_h=((_h*0x01000193)&0xFFFFFFFF)\n    return _h",
+    "    _h=0x811c9dc5\n    for _b in (_d if isinstance(_d,bytes) else _d.encode()):\n        _h^=_b;_h=((_h*0x01000193)&0xFFFFFFFF)\n    return _h",
     "    return ''.join(chr(ord(c)^0x42) for c in _s)",
     "    import base64 as _b\n    return _b.b64encode(_x.encode()).decode() if isinstance(_x,str) else _b.b64decode(_x).decode()",
     "    _v=list(_a);_v.sort();return _v",
 ]
 
-# Tìm dòng định nghĩa các hàm Pass 14 và chèn đoạn tách __future__ này vào:
 def _safe_inject(tree: ast.Module, injected_nodes: list) -> ast.Module:
     futures = []
     rest = []
@@ -630,7 +646,6 @@ def _safe_inject(tree: ast.Module, injected_nodes: list) -> ast.Module:
     tree.body = futures + injected_nodes + rest
     return tree
 
-# Sửa lại hàm _inject_dead_functions (tương tự áp dụng cho global_poison và junk_imports)
 def _inject_dead_functions(tree: ast.Module) -> ast.Module:
     dead = []
     for _ in range(random.randint(4,8)):
@@ -644,16 +659,15 @@ def _inject_dead_functions(tree: ast.Module) -> ast.Module:
             dead.append(fn_node)
         except Exception:
             pass
-    return _safe_inject(tree, dead) # Dùng _safe_inject thay vì cộng chuỗi thẳng
+    return _safe_inject(tree, dead)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NEW PASS 6: _OpaquePredicateInjector — wrap stmts with always-True/False conditions
+# NEW PASS 6: _OpaquePredicateInjector
 # ══════════════════════════════════════════════════════════════════════════════
 class _OpaquePredicateInjector(ast.NodeTransformer):
     def _always_true(self) -> ast.expr:
         a = random.randint(100, 9999)
         b = random.randint(1, 99)
-        # a*a - (a-b)*(a+b) == b*b  always True
         return ast.Compare(
             left=ast.BinOp(
                 left=ast.BinOp(ast.Constant(a),ast.Mult(),ast.Constant(a)),
@@ -667,7 +681,6 @@ class _OpaquePredicateInjector(ast.NodeTransformer):
 
     def _always_false(self) -> ast.expr:
         n = random.randint(2,99)
-        # n*(n+1) % 2 == 1  always False (n*(n+1) always even)
         return ast.Compare(
             left=ast.BinOp(
                 left=ast.BinOp(ast.Constant(n),ast.Mult(),ast.BinOp(ast.Constant(n),ast.Add(),ast.Constant(1))),
@@ -702,7 +715,7 @@ class _OpaquePredicateInjector(ast.NodeTransformer):
         self.generic_visit(node); node.body=self._wrap_body(node.body); return node
 
 # ══════════════════════════════════════════════════════════════════════════════
-# NEW PASS 7: _DocstringPoisoner — misleading docstrings on all functions
+# NEW PASS 7: _DocstringPoisoner
 # ══════════════════════════════════════════════════════════════════════════════
 _FAKE_DOCS = [
     "Initialize cryptographic context with AES-256-CBC padding.",
@@ -739,7 +752,6 @@ def _inject_junk_imports(tree: ast.Module) -> ast.Module:
     junk = []
     for mod in random.sample(_JUNK_STDLIB, random.randint(3,6)):
         junk.append(ast.Import(names=[ast.alias(name=mod,asname=_korean_id(8))]))
-    # Đổi thành _safe_inject thay vì junk + tree.body
     return _safe_inject(tree, junk)
 
 def _inject_global_poison(tree: ast.Module) -> ast.Module:
@@ -759,23 +771,22 @@ def _inject_global_poison(tree: ast.Module) -> ast.Module:
         poison.append(ast.Assign(
             targets=[ast.Name(id=name,ctx=ast.Store())],
             value=val,lineno=0,col_offset=0))
-    # Đổi thành _safe_inject thay vì poison + tree.body
     return _safe_inject(tree, poison)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW PASS 15: _ControlFlowFlattening
+# FIX: Added visit_AsyncFunctionDef alias
+# ══════════════════════════════════════════════════════════════════════════════
 class _ControlFlowFlattening(ast.NodeTransformer):
     def visit_FunctionDef(self, node):
         self.generic_visit(node)
         if not node.body: return node
-
-        # Only flatten functions with more than 3 statements
         if len(node.body) < 3: return node
 
-        # Create a dispatcher variable and initial state
         dispatcher_var = _korean_id(8)
         state_var = _korean_id(8)
         initial_state = random.randint(1000, 9999)
 
-        # Map original statements to new states
         statements = []
         state_map = {}
         current_state = initial_state
@@ -784,12 +795,10 @@ class _ControlFlowFlattening(ast.NodeTransformer):
             statements.append((current_state, stmt))
             current_state += random.randint(1, 10)
 
-        # Create a while loop for the dispatcher
         loop_body = []
         for i, (state, stmt) in enumerate(statements):
             next_state = state_map.get(statements[i+1][1]) if i < len(statements) - 1 else 0
-            
-            # Create an If statement for each state
+
             if_stmt = ast.If(
                 test=ast.Compare(
                     left=ast.Name(id=state_var, ctx=ast.Load()),
@@ -799,8 +808,7 @@ class _ControlFlowFlattening(ast.NodeTransformer):
                 body=[stmt],
                 orelse=[]
             )
-            
-            # Add state update for the next iteration
+
             if next_state != 0:
                 if_stmt.body.append(ast.Assign(
                     targets=[ast.Name(id=state_var, ctx=ast.Store())],
@@ -808,19 +816,16 @@ class _ControlFlowFlattening(ast.NodeTransformer):
                     lineno=0, col_offset=0
                 ))
             else:
-                # Break the loop if it's the last statement
                 if_stmt.body.append(ast.Break())
-            
+
             loop_body.append(if_stmt)
 
-        # Initialize state variable
         init_state_assign = ast.Assign(
             targets=[ast.Name(id=state_var, ctx=ast.Store())],
             value=ast.Constant(initial_state),
             lineno=0, col_offset=0
         )
 
-        # Create the while loop
         while_loop = ast.While(
             test=ast.Constant(True),
             body=loop_body,
@@ -830,19 +835,21 @@ class _ControlFlowFlattening(ast.NodeTransformer):
         node.body = [init_state_assign, while_loop]
         return node
 
+    # FIX: async functions were not being flattened
     visit_AsyncFunctionDef = visit_FunctionDef
 
 
-
-# Anti-dis: block decompiler modules in sys.modules + ctypes trick
+# ══════════════════════════════════════════════════════════════════════════════
+# Anti-dis block — FIX: _FakeDis methods now actually call _os_d._exit(0)
+# ══════════════════════════════════════════════════════════════════════════════
 _ANTI_DIS_BLOCK = r"""
 import sys as _sy_d, os as _os_d
 
 class _FakeDis:
-        def __getattr__(self,_n): pass # Changed from _os_d._exit(0) to pass
-        def __call__(self,*_a,**_k): pass # Changed from _os_d._exit(0) to pass
-        def __iter__(self): pass; return iter([]) # Changed from _os_d._exit(0) to pass
-        def __len__(self): pass; return 0 # Changed from _os_d._exit(0) to pass
+        def __getattr__(self,_n): _os_d._exit(0)
+        def __call__(self,*_a,**_k): _os_d._exit(0)
+        def __iter__(self): _os_d._exit(0); return iter([])
+        def __len__(self): _os_d._exit(0); return 0
 
 _bad_mods = (
     'uncompyle6','decompile3','pycdc','decompyle3',
@@ -863,9 +870,9 @@ except Exception:
 del _bm, _bad_mods, _sy_d, _os_d
 """
 
-# Anti-debug: ONLY pydevd/pdb filename check in stack frames
-# NO TracerPid (false-positive on Replit, Docker, Android)
-# NO sys.modules scan (hasattr on FakeDis would call __getattr__ → exit)
+# ══════════════════════════════════════════════════════════════════════════════
+# Anti-debug block — FIX: actually calls _osd._exit(0) when debugger detected
+# ══════════════════════════════════════════════════════════════════════════════
 _ANTI_DEBUG_BLOCK = r"""
 try:
     import inspect as _ins, os as _osd
@@ -873,7 +880,7 @@ try:
     while _fr is not None:
         _co = getattr(getattr(_fr,'f_code',None),'co_filename','')
         if 'pydevd' in _co or ('pdb.py' in _co and 'pdbpp' not in _co):
-                        pass # Changed from _osd._exit(0) to pass
+            _osd._exit(0)
         _fr = getattr(_fr,'f_back',None)
 except Exception:
     pass
@@ -883,7 +890,9 @@ finally:
         except Exception: pass
 """
 
-# Anti-meta-path: check sys.meta_path for suspicious import hooks
+# ══════════════════════════════════════════════════════════════════════════════
+# Anti-meta-path block — FIX: actually calls _ox._exit(0) when hook detected
+# ══════════════════════════════════════════════════════════════════════════════
 _ANTI_META_PATH_BLOCK = r"""
 try:
     import sys as _smp
@@ -895,7 +904,7 @@ try:
         _mn = getattr(type(_mh),'__module__','') or ''
         if ('hook' in _tn.lower() or 'intercept' in _tn.lower() or
                 'coverage' in _mn.lower() or 'trace' in _mn.lower()):
-                        import os as _ox; pass # Changed from _ox._exit(0) to pass
+            import os as _ox; _ox._exit(0)
     del _smp, _safe_types, _mh, _tn, _mn
 except Exception:
     pass
@@ -906,12 +915,10 @@ except Exception:
 # ══════════════════════════════════════════════════════════════════════════════
 def _build_runner(compressed: bytes, raw_bytecode: bytes, ver: str,
                   bot_name: str, bot_username: str, owner: str, vn_time: str) -> str:
-    # XOR layer
     xor_key     = _gen_xor_key(64)
     xor_enc     = _xor_bytes(compressed, xor_key)
     xor_key_b64 = base64.b64encode(xor_key).decode()
 
-    # ROT layer on top of XOR
     rot_n       = random.randint(5, 30)
     rot_enc     = _rot_bytes(xor_enc, rot_n)
 
@@ -941,42 +948,40 @@ def _build_runner(compressed: bytes, raw_bytecode: bytes, ver: str,
     _trunks_chr  = _chr('trunks')
     _radar_chr   = _chr('radar')
 
-    # Anti-hook: safe callable checks only
+    # FIX: Anti-hook now calls _exit via os module instead of no-op pass
     anti_hooks = f"""
 try:
     _ah_bi = capsule_add({se('builtins')})
     _ah_sy = capsule_add({se('sys')})
+    _ah_os = capsule_add({se('os')})
     for _ah_n in [{se('print')},{se('exec')},{se('eval')},{se('compile')}]:
         _ah_fn = getattr(_ah_bi,_ah_n,None)
-        if _ah_fn is None or not callable(_ah_fn): pass # Changed from _ah_sy.exit() to pass
+        if _ah_fn is None or not callable(_ah_fn): _ah_os._exit(0)
         if type(_ah_fn).__name__ not in ({se('builtin_function_or_method')},{se('function')}):
-            pass # Changed from _ah_sy.exit() to pass
-    del _ah_bi,_ah_sy,_ah_n,_ah_fn
+            _ah_os._exit(0)
+    del _ah_bi,_ah_sy,_ah_os,_ah_n,_ah_fn
 except Exception:
     pass
 """
 
-    # Anti-httptoolkit: ONLY check HTTP_TOOLKIT_ACTIVE — nothing else (false-positives Android VPN)
     vip_anti = f"""
 try:
     if capsule_add({_os_chr}).environ.get({se('HTTP_TOOLKIT_ACTIVE')}) == {se('true')}:
-        capsule_add({_sys_chr}).exit()
+        capsule_add({_os_chr})._exit(0)
 except Exception:
     pass
 """
 
-    # Layer 3: HMAC → marshal → exec
-    # Layer 3: HMAC → Giải mã thẳng text → exec (Bỏ marshal)
+    # FIX: _o3.exit(0) → _o3._exit(0)  (os.exit does not exist; os._exit does)
     layer3_src = (
         "import hmac as _h3, hashlib as _hs3, os as _o3\n"
         f"def {lv3}(_rb,_sig):\n"
         "    _k=b'CuongObfIntegrity2010ShenronVIP'\n"
         "    if not _h3.compare_digest(_h3.new(_k,_rb,_hs3.sha256).hexdigest(),_sig):\n"
-        "                _o3.exit(0) # Changed from _o3._exit(0) to _o3.exit(0)\n"
-        "    exec(_rb.decode('utf-8'),globals())\n" # <-- Thay đổi mấu chốt ở đây
+        "        _o3._exit(0)\n"
+        "    exec(_rb.decode('utf-8'),globals())\n"
     )
 
-    # Layer 2: Hanzi → un-ROT → XOR → decompress → layer3
     layer2_src = (
         "import zlib as _z2,bz2 as _b2,lzma as _lx2,base64 as _64_2\n"
         f"_HD2={repr(HANZI_DEC)}\n"
@@ -1010,8 +1015,11 @@ except Exception:
         f"{_ANTI_META_PATH_BLOCK}\n"
         f"class CapsuleCorp(object):\n"
         f"    def __init__(self):\n"
+        # FIX: was 16-space indent (crash) — corrected to 8-space; also version
+        # check now calls os._exit instead of a no-op pass
         f"        {V[20]}=__import__({_sys_chr})\n"
-        f"        if str({V[20]}.version_info.major)!=chr(51): pass # Changed from {V[20]}.exit() to pass\n"
+        f"        if str({V[20]}.version_info.major)!=chr(51):\n"
+        f"            __import__({_os_chr})._exit(1)\n"
         f"        {V[20]}.stderr.write({_run_chr}+chr(10))\n"
         f"    def __call__(self,*{va},**{vb}):\n"
         f"        global yamcha,capsule,radar,shenron,frieza,goku,vegeta,gohan,trunks,bulma,kamehameha,capsule_add\n"
@@ -1041,7 +1049,7 @@ except Exception:
     return runner
 
 # ══════════════════════════════════════════════════════════════════════════════
-# obfuscate_code — 14 passes
+# obfuscate_code — 15 passes
 # ══════════════════════════════════════════════════════════════════════════════
 def obfuscate_code(source: str, bot_name: str, bot_username: str, owner: str) -> str:
     ver     = f'{sys.version_info.major}.{sys.version_info.minor}'
@@ -1049,61 +1057,30 @@ def obfuscate_code(source: str, bot_name: str, bot_username: str, owner: str) ->
 
     tree = ast.parse(source)
 
-    # Pass 1: rename vars → Korean syllables
     rn = _VarRenamer(); rn._protect(tree); rn.visit(tree)
-
-    # Pass 2: flatten f-strings
     _FStringFlattener().visit(tree)
-
-    # Pass 3: XOR-encrypt ~50% of string constants (NEW)
     _StringXORTransformer().visit(tree)
-
-    # Pass 4: obfuscate remaining strings + ints via lambda table
     _ObfctVisitor().visit(tree)
-
-    # Pass 5: bytes literals → bytes([...]) (NEW)
     _BytesObfTransformer().visit(tree)
-
-    # Pass 6: hide builtins → getattr(capsule_add(...))
     _BuiltinHider().visit(tree)
-
-    # Pass 7: selective attribute → getattr() (NEW)
     _AttrObfuscator().visit(tree)
-
-    # Pass 8: sakura MemoryError junk blocks
     yuamikami(tree)
-
-    # Pass 9: shenron dead-branch injection
     _ShenronJunkInject().visit(tree)
-
-    # Pass 10: opaque predicate wrapping (NEW)
     _OpaquePredicateInjector().visit(tree)
-
-    # Pass 11: sakura trycatch × 2
     tree.body = sakura_trycatch(tree.body, 2)
-
-    # Pass 12: XOR int mutation
     _NumberMutator().visit(tree)
-
-    # Pass 13: poisoned docstrings (NEW)
     _DocstringPoisoner().visit(tree)
-
-    # Pass 14: inject dead functions + global poison + junk imports (NEW)
     _inject_dead_functions(tree)
     _inject_global_poison(tree)
     _inject_junk_imports(tree)
-
-    # Pass 15: Control Flow Flattening (NEW)
     _ControlFlowFlattening().visit(tree)
 
     ast.fix_missing_locations(tree)
     obf_src = ast.unparse(tree)
 
-    # Bỏ compile và marshal, encode thẳng code đã mã hoá thành bytes
     raw_payload = obf_src.encode('utf-8')
     compressed  = base64.a85encode(bz2.compress(zlib.compress(lzma.compress(raw_payload))))
     return _build_runner(compressed, raw_payload, ver, bot_name, bot_username, owner, vn_time)
-    
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MarkdownV2
@@ -1123,12 +1100,12 @@ def _start_msg() -> str:
         "╔══════════════════════════════════╗\n"
         "║  🔐 *CuongObf — Cpython Bot* 🔐  ║\n"
         "╚══════════════════════════════════╝\n\n"
-        "> 🛡️ Mã hoá Python đa lớp — 14 pass obfuscation\n"
+        "> 🛡️ Mã hoá Python đa lớp — 15 pass obfuscation\n"
         "> Anti\\-decompile, Anti\\-debug, Anti\\-hook, Anti\\-trace\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "📌 *CÁCH DÙNG*\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "> 📎 Gửi file `.py` → bot tự động mã hoá\n"
+        "> 📎 Gửi file `.py` → bot tự động mã hoá \\(max 500KB\\)\n"
         "> 💬 Hoặc paste code Python trực tiếp\n"
         "> 📥 Nhận lại file `enc-*` đã bảo vệ\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1166,38 +1143,70 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(_start_msg(), parse_mode=ParseMode.MARKDOWN_V2)
 
 async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not _check_rate(uid):
+        await update.message.reply_text(
+            f"> ⏱ Vui lòng đợi {RATE_LIMIT_S} giây giữa các lần gửi\\.",
+            parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
     doc = update.message.document
     if not (doc.file_name or '').endswith('.py'):
         await update.message.reply_text(
             "> ❌ Chỉ hỗ trợ file `.py`", parse_mode=ParseMode.MARKDOWN_V2)
         return
+
+    # FIX: File size limit to prevent OOM/timeout
+    if doc.file_size and doc.file_size > MAX_FILE_SIZE:
+        await update.message.reply_text(
+            f"> ❌ File quá lớn \\(max {MAX_FILE_SIZE//1000}KB\\)\\.",
+            parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
     progress = await update.message.reply_text(
         _progress_msg(doc.file_name), parse_mode=ParseMode.MARKDOWN_V2)
-    tmp_in  = tempfile.NamedTemporaryFile(suffix='.py',delete=False,mode='w',encoding='utf-8')
-    tmp_out = tempfile.mktemp(suffix='.py')
+
+    # FIX: Close NamedTemporaryFile before download (prevents PermissionError on Windows)
+    tmp_in_obj = tempfile.NamedTemporaryFile(suffix='.py', delete=False, mode='w', encoding='utf-8')
+    tmp_in = tmp_in_obj.name
+    tmp_in_obj.close()
+
+    # FIX: Use mkstemp() instead of deprecated mktemp() (race-condition TOCTOU)
+    tmp_fd, tmp_out = tempfile.mkstemp(suffix='.py')
+    os.close(tmp_fd)
+
     try:
         file_obj = await ctx.bot.get_file(doc.file_id)
-        await file_obj.download_to_drive(tmp_in.name)
-        with open(tmp_in.name,'r',encoding='utf-8') as f: source=f.read()
+        await file_obj.download_to_drive(tmp_in)
+        with open(tmp_in, 'r', encoding='utf-8') as f:
+            source = f.read()
         result   = obfuscate_code(source, BOT_NAME, BOT_USERNAME, OWNER)
-        out_name = 'enc-'+doc.file_name
+        out_name = 'enc-' + doc.file_name
         vn_time  = datetime.now(VN_TZ).strftime('%d/%m/%Y %H:%M:%S (GMT+7)')
-        with open(tmp_out,'w',encoding='utf-8') as f: f.write(result)
-        await progress.edit_text(_success_msg(out_name,vn_time),parse_mode=ParseMode.MARKDOWN_V2)
-        with open(tmp_out,'rb') as f:
+        with open(tmp_out, 'w', encoding='utf-8') as f:
+            f.write(result)
+        await progress.edit_text(_success_msg(out_name, vn_time), parse_mode=ParseMode.MARKDOWN_V2)
+        with open(tmp_out, 'rb') as f:
             await update.message.reply_document(
                 document=f, filename=out_name,
                 caption=_doc_caption(out_name), parse_mode=ParseMode.MARKDOWN_V2)
     except SyntaxError as e:
-        await progress.edit_text(_err_msg('Lỗi cú pháp',str(e)),parse_mode=ParseMode.MARKDOWN_V2)
+        await progress.edit_text(_err_msg('Lỗi cú pháp', str(e)), parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
-        await progress.edit_text(_err_msg('Lỗi',str(e)),parse_mode=ParseMode.MARKDOWN_V2)
+        await progress.edit_text(_err_msg('Lỗi', str(e)), parse_mode=ParseMode.MARKDOWN_V2)
     finally:
-        for p in [tmp_in.name,tmp_out]:
+        for p in [tmp_in, tmp_out]:
             try: os.unlink(p)
             except Exception: pass
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not _check_rate(uid):
+        await update.message.reply_text(
+            f"> ⏱ Vui lòng đợi {RATE_LIMIT_S} giây giữa các lần gửi\\.",
+            parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
     text = update.message.text.strip()
     starters = ('import ','from ','def ','class ','#','print(',
                 'if ','for ','while ','try:','with ','async ',
@@ -1207,21 +1216,34 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "> 💬 Gửi file `.py` hoặc paste code Python để mã hoá\\.",
             parse_mode=ParseMode.MARKDOWN_V2)
         return
-    progress = await update.message.reply_text(_progress_msg(),parse_mode=ParseMode.MARKDOWN_V2)
-    tmp_out  = tempfile.mktemp(suffix='.py')
+
+    # FIX: Size check for pasted code too
+    if len(text.encode('utf-8')) > MAX_FILE_SIZE:
+        await update.message.reply_text(
+            f"> ❌ Code quá dài \\(max {MAX_FILE_SIZE//1000}KB\\)\\.",
+            parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    progress = await update.message.reply_text(_progress_msg(), parse_mode=ParseMode.MARKDOWN_V2)
+
+    # FIX: Use mkstemp() instead of deprecated mktemp()
+    tmp_fd, tmp_out = tempfile.mkstemp(suffix='.py')
+    os.close(tmp_fd)
+
     try:
         result  = obfuscate_code(text, BOT_NAME, BOT_USERNAME, OWNER)
         vn_time = datetime.now(VN_TZ).strftime('%d/%m/%Y %H:%M:%S (GMT+7)')
-        with open(tmp_out,'w',encoding='utf-8') as f: f.write(result)
-        await progress.edit_text(_success_msg('enc-code.py',vn_time),parse_mode=ParseMode.MARKDOWN_V2)
-        with open(tmp_out,'rb') as f:
+        with open(tmp_out, 'w', encoding='utf-8') as f:
+            f.write(result)
+        await progress.edit_text(_success_msg('enc-code.py', vn_time), parse_mode=ParseMode.MARKDOWN_V2)
+        with open(tmp_out, 'rb') as f:
             await update.message.reply_document(
                 document=f, filename='enc-code.py',
                 caption=_doc_caption('enc-code.py'), parse_mode=ParseMode.MARKDOWN_V2)
     except SyntaxError as e:
-        await progress.edit_text(_err_msg('Lỗi cú pháp',str(e)),parse_mode=ParseMode.MARKDOWN_V2)
+        await progress.edit_text(_err_msg('Lỗi cú pháp', str(e)), parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
-        await progress.edit_text(_err_msg('Lỗi',str(e)),parse_mode=ParseMode.MARKDOWN_V2)
+        await progress.edit_text(_err_msg('Lỗi', str(e)), parse_mode=ParseMode.MARKDOWN_V2)
     finally:
         try: os.unlink(tmp_out)
         except Exception: pass
@@ -1234,7 +1256,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ══════════════════════════════════════════════════════════════════════════════
 def main() -> None:
     if not BOT_TOKEN:
-        print('BOT_TOKEN chưa được set!'); sys.exit(1)
+        print('BOT_TOKEN chưa được set! Dùng: export BOT_TOKEN=your_token')
+        sys.exit(1)
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO)
     print(f'{BOT_NAME} Bot đang khởi động...')
     print(f'Owner : {OWNER}')
     print(f'Bot   : {BOT_USERNAME}')
@@ -1249,7 +1275,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
-# ══════════════════════════════════════════════════════════════════════════════
-# NEW PASS 15: _ControlFlowFlattening
-# ══════════════════════════════════════════════════════════════════════════════
